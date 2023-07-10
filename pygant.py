@@ -9,6 +9,15 @@ load_dotenv()
 
 NomeParaAtualizar = os.environ.get('NOME')
 
+# insira aqui palavras para serem ignoradas 
+# durante a apuração de entradas de tempo
+palavrasGatilhoParaIgnorarTarefa = [
+        'standup',
+        'gant'
+]
+
+listaTimeEntry = []
+
 def conectarPlanilhaEspelho(nomeArquivo, codigoPlanilha, nomeFolha):
     gc = gspread.service_account(filename=nomeArquivo)
     sh = gc.open_by_key(codigoPlanilha)
@@ -69,6 +78,33 @@ def salvarNaPlanilha(planilha, tarefa, posicao):
 
         planilha.format(posicao_celula, {'backgroundColor': {'red': 0.949, 'green': 0.949, 'blue': 0.949}})
 
+def tarefaDeveSerConsiderada(descricao):
+    for palavra in palavrasGatilhoParaIgnorarTarefa:
+        if palavra.lower() in descricao.lower():
+            return False
+    return True
+
+def adicionaEntradaDeTempo(timeEntry):
+    for entrada_existente in listaTimeEntry:
+        if entrada_existente['descricao'] == timeEntry['descricao']:
+            entrada_existente['duracao'] += timeEntry['duracao']
+
+            if not (timeEntry['dias'] in entrada_existente['dias']):
+                entrada_existente['dias'] += ' ' + timeEntry['dias']
+            break
+    else:
+        listaTimeEntry.append(timeEntry)
+
+def ordenarPorTag(lista):
+    tagsOrdenadas = sorted(set(entry['tag'] for entry in lista))
+    listaOrdenada = []
+
+    for tag in tagsOrdenadas:
+        entradasPorTag = [entry for entry in lista if entry['tag'] == tag]
+        listaOrdenada.extend(entradasPorTag)
+
+    return listaOrdenada
+    
 
 email = os.environ.get('EMAIL')
 password = os.environ.get('SENHA')
@@ -82,51 +118,51 @@ if autenticado:
     tarefas = obterTarefas(email, password, data_inicio, data_fim)
 
     if tarefas is not None:
-        timesEntries = []
 
         for entrada in tarefas:
             tags = entrada.get('tags')
             descricao = entrada.get('description')
-            duracao = entrada.get('duration', 0)
 
-            dias = entrada.get('start')
+            if tarefaDeveSerConsiderada(descricao):
+                duracao = entrada.get('duration', 0)
+                dias = entrada.get('start')
+                data_formatada = formatarData(dias)
 
-            data_formatada = formatarData(dias)
+                timeEntry = {
+                    'tag': tags[0],
+                    'descricao': descricao,
+                    'duracao': duracao,
+                    'dias': data_formatada
+                }
 
-            timeentry = {
-                'tag': tags[0],
-                'descricao': descricao,
-                'duracao': duracao,
-                'dias': data_formatada
-            }
+                adicionaEntradaDeTempo(timeEntry)
 
-            for entrada_existente in timesEntries:
-                if entrada_existente['descricao'] == timeentry['descricao']:
-                    entrada_existente['duracao'] += timeentry['duracao']
+            else:   
+                print(f'A entrada de tempo {descricao} foi ignorada, pois possui uma palavra gatilho.')
+                
+        if len(listaTimeEntry) > 0:
 
-                    if not (timeentry['dias'] in entrada_existente['dias']):
-                        entrada_existente['dias'] += ' ' + timeentry['dias']
-                    break
-            else:
-                timesEntries.append(timeentry)
+            listaOrdenada = ordenarPorTag(listaTimeEntry)
 
-        posicao = 3
-        duracaoTotal = 0
+            posicao = 3
+            duracaoTotal = 0
 
-        for te in timesEntries:
-            duracao_em_horas = converteSegundosParaHoras(int(te['duracao'])) 
-            duracaoTotal += duracao_em_horas 
-            if duracao_em_horas > 0:
-                te['duracao'] = duracao_em_horas
-                salvarNaPlanilha(ws, te, posicao)
-                posicao += 1
+            for te in listaOrdenada:
+                duracao_em_horas = converteSegundosParaHoras(int(te['duracao'])) 
+                duracaoTotal += duracao_em_horas 
+                if duracao_em_horas > 0:
+                    te['duracao'] = duracao_em_horas
+                    salvarNaPlanilha(ws, te, posicao)
+                    posicao += 1
 
-        print(' ')
-        print(f'Foram salvas com sucesso {len(timesEntries)} tarefas')
-        print(' ')
-        print(f'Total de horas trabalhadas: {duracaoTotal} horas')
-        print(f'Média de horas trabalhadas por demanda: {duracaoTotal / len(timesEntries)} horas')
-        print(' ')
+            print(' ')
+            print(f'Foram salvas com sucesso {len(listaOrdenada)} tarefas')
+            print(' ')
+            print(f'Total de horas trabalhadas: {duracaoTotal} horas')
+            print(f'Média de horas trabalhadas por demanda: {duracaoTotal / len(listaOrdenada)} horas')
+            print(' ')
+        else:
+            print('Não temos nenhuma tarefa válida para o período')
     else:
         print('Erro ao obter as tarefas.')
 else:
