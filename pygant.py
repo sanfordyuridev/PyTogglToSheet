@@ -1,4 +1,6 @@
 import os
+import time
+import random
 import gspread
 import requests
 from base64 import b64encode
@@ -17,6 +19,18 @@ palavrasGatilhoParaIgnorarTarefa = [
 ]
 
 listaTimeEntry = []
+
+def format_duration(duration):
+    hours, remainder = divmod(duration, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    return '{:02d}:{:02d}:{:02d}'.format(int(hours), int(minutes), int(seconds))
+
+def exponential_backoff(n):
+    base_wait_time = 1
+    maximum_backoff = 64
+    random_milliseconds = random.randint(0, 1000)
+    wait_time = min(((2 ** n) + random_milliseconds), maximum_backoff)
+    return base_wait_time + wait_time
 
 def conectarPlanilhaEspelho(nomeArquivo, codigoPlanilha, nomeFolha):
     gc = gspread.service_account(filename=nomeArquivo)
@@ -59,24 +73,42 @@ def salvarNaPlanilha(planilha, tarefa, posicao):
     pos_ref_dias_inicio = 'D1'
     pos_ref_dias_fim = 'Z1'
 
-    planilha.update('A' + str(posicao), tarefa['tag'])
-    planilha.update('B' + str(posicao), tarefa['descricao'])
-    planilha.update('C' + str(posicao), tarefa['duracao'])
+    n = 0
 
-    dias = tarefa['dias'].split()
+    while True:
+        try:
+            planilha.update('A' + str(posicao), tarefa['tag'])
+            planilha.update('B' + str(posicao), tarefa['descricao'])
+            planilha.update('C' + str(posicao), tarefa['duracao'])
 
-    cell_range = planilha.range(pos_ref_dias_inicio + ':' + pos_ref_dias_fim)
-    valores = [celula.value for celula in cell_range]
+            dias = tarefa['dias'].split()
 
-    for dia in dias:
-        indice_coluna = next(indice for indice, valor in enumerate(valores) if valor == dia)
-        letra_coluna = chr(ord(pos_ref_dias_inicio[0]) + indice_coluna)
+            cell_range = planilha.range(pos_ref_dias_inicio + ':' + pos_ref_dias_fim)
+            valores = [celula.value for celula in cell_range]
 
-        posicao_celula = letra_coluna + str(posicao)
+            for dia in dias:
+                indice_coluna = next(indice for indice, valor in enumerate(valores) if valor == dia)
+                letra_coluna = chr(ord(pos_ref_dias_inicio[0]) + indice_coluna)
 
-        planilha.update(posicao_celula, NomeParaAtualizar)
+                posicao_celula = letra_coluna + str(posicao)
 
-        planilha.format(posicao_celula, {'backgroundColor': {'red': 0.949, 'green': 0.949, 'blue': 0.949}})
+                planilha.update(posicao_celula, NomeParaAtualizar)
+
+                planilha.format(posicao_celula, {'backgroundColor': {'red': 0.949, 'green': 0.949, 'blue': 0.949}})
+
+            break
+
+        except gspread.exceptions.APIError as e:
+            if e.response.status_code == 429:
+                print("Cota excedida. Aguardando tempo de espera exponencial...")
+                wait_time = exponential_backoff(n)
+                formatted_wait_time = format_duration(wait_time)
+                print("Tempo de espera:", formatted_wait_time)
+                time.sleep(wait_time)
+                n += 1
+            else:
+                print("Erro ao atualizar a planilha:", e)
+                break
 
 def tarefaDeveSerConsiderada(descricao):
     for palavra in palavrasGatilhoParaIgnorarTarefa:
@@ -134,7 +166,6 @@ if autenticado:
                     'duracao': duracao,
                     'dias': data_formatada
                 }
-
                 adicionaEntradaDeTempo(timeEntry)
 
             else:   
@@ -152,6 +183,7 @@ if autenticado:
                 duracaoTotal += duracao_em_horas 
                 if duracao_em_horas > 0:
                     te['duracao'] = duracao_em_horas
+                    print(te)
                     salvarNaPlanilha(ws, te, posicao)
                     posicao += 1
 
