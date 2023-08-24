@@ -183,6 +183,7 @@ if autenticado:
                 duracaoTotal += duracao_em_horas 
                 if duracao_em_horas > 0:
                     te['duracao'] = duracao_em_horas
+                    print(te)
                     salvarNaPlanilha(ws, te, posicao)
                     posicao += 1
 
